@@ -1,2 +1,0 @@
-"""Rule plug‑ins package."""
-
