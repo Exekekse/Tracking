@@ -16,6 +16,7 @@ from ultralytics import YOLO
 import config
 from detection import Detection
 from overlay import Drawer, KeyHelper, MenuState
+from pose_parts import compute_parts_for_detection, export_parts_labels
 from rule_engine import RuleEngine
 from tracker import CentroidTracker
 
@@ -60,7 +61,16 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, handle_sigint)
 
-    model = YOLO(config.MODEL_PATH)
+    pose_enabled = False
+    try:
+        model_path = config.POSE_MODEL_PATH if config.ENABLE_POSE_PARTS else config.MODEL_PATH
+        model = YOLO(model_path)
+        pose_enabled = config.ENABLE_POSE_PARTS and model.task == "pose"
+    except Exception as exc:
+        print(f"[WARN] Pose-Modell konnte nicht geladen werden: {exc}. Deaktiviere Parts.")
+        model = YOLO(config.MODEL_PATH)
+        pose_enabled = False
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
 
@@ -78,6 +88,7 @@ def main() -> None:
         person_only=config.PERSON_ONLY,
         show_trails=True,
         show_hud=True,
+        show_parts=False,
     )
 
     key = KeyHelper()
@@ -113,20 +124,43 @@ def main() -> None:
                     frame = np.array(sct.grab(monitor))
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
 
-                results = model(frame, conf=menu_state.conf_thres, verbose=False)
+                infer = frame
+                scale_x = scale_y = 1.0
+                if config.INFER_RESIZE:
+                    infer = cv2.resize(frame, config.INFER_RESIZE)
+                    scale_x = frame.shape[1] / infer.shape[1]
+                    scale_y = frame.shape[0] / infer.shape[0]
+
+                results = model(infer, conf=menu_state.conf_thres, verbose=False)
                 r = results[0]
 
                 dets: List[Detection] = []
                 if r.boxes is not None and len(r.boxes) > 0:
-                    xyxy = r.boxes.xyxy.cpu().numpy().astype(int)
+                    xyxy = r.boxes.xyxy.cpu().numpy()
                     confs = r.boxes.conf.cpu().numpy()
-                    clss = r.boxes.cls.cpu().numpy().astype(int)
-                    for (x1, y1, x2, y2), c, cls in zip(xyxy, confs, clss):
+                    clss = r.boxes.cls.cpu().numpy().astype(int) if r.boxes.cls is not None else np.zeros(len(xyxy), dtype=int)
+                    if config.INFER_RESIZE:
+                        xyxy[:, [0, 2]] *= scale_x
+                        xyxy[:, [1, 3]] *= scale_y
+
+                    kps = None
+                    if pose_enabled and r.keypoints is not None:
+                        kps_xy = r.keypoints.xy.cpu().numpy()
+                        if config.INFER_RESIZE:
+                            kps_xy[..., 0] *= scale_x
+                            kps_xy[..., 1] *= scale_y
+                        kps_conf = r.keypoints.conf.cpu().numpy()
+                        kps = np.dstack([kps_xy, kps_conf])
+
+                    for idx, ((x1, y1, x2, y2), c, cls) in enumerate(zip(xyxy, confs, clss)):
                         if menu_state.person_only and person_id is not None and cls != person_id:
                             continue
-                        dets.append(Detection(x1, y1, x2, y2, int(cls), float(c)))
+                        kp_list = kps[idx].tolist() if kps is not None else None
+                        det = Detection(int(x1), int(y1), int(x2), int(y2), int(cls), float(c), kp_list)
+                        dets.append(det)
 
                 dets = engine.apply(dets, frame)
+                parts_list = [compute_parts_for_detection(d, frame.shape[:2]) for d in dets] if pose_enabled else []
                 id2box = ct.update([(d.x1, d.y1, d.x2, d.y2) for d in dets])
 
                 annotated = frame.copy()
@@ -139,6 +173,8 @@ def main() -> None:
                     fps_smooth=fps_smooth,
                     person_only=menu_state.person_only,
                     conf_thres=menu_state.conf_thres,
+                    show_parts=pose_enabled and menu_state.show_parts,
+                    parts_list=parts_list,
                 )
 
                 if drawer.menu_open:
@@ -175,6 +211,17 @@ def main() -> None:
                         export_for_training(frame, dets, names)
                     elif key.is_reload_rules(k):
                         engine.load_rules()
+                    elif key.is_toggle_parts(k):
+                        if pose_enabled:
+                            menu_state.show_parts = not menu_state.show_parts
+                            print(f"[INFO] Parts {'ON' if menu_state.show_parts else 'OFF'}")
+                        else:
+                            print("[WARN] Pose-Modell nicht verfügbar – Parts deaktiviert.")
+                    elif key.is_export_parts(k):
+                        if pose_enabled:
+                            export_parts_labels(frame, parts_list, config.EXPORT_PARTS_DIR)
+                        else:
+                            print("[WARN] Keine Parts verfügbar – Export abgebrochen.")
                     elif drawer.menu_open:
                         if key.is_plus(k):
                             menu_state.conf_thres = min(0.99, menu_state.conf_thres + 0.02)

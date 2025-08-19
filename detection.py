@@ -1,6 +1,7 @@
 """Detection data container used across the project."""
 
 from dataclasses import dataclass
+from typing import List, Optional
 
 
 @dataclass
@@ -13,6 +14,7 @@ class Detection:
     y2: int
     cls: int
     conf: float
+    keypoints: Optional[List[tuple[float, float, float]]] = None
 
     @property
     def cx(self) -> int:

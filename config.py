@@ -8,6 +8,16 @@ the prototype contained in :mod:`main`.
 # Path to the YOLO model weights
 MODEL_PATH = "yolov8n.pt"
 
+# Path to the YOLO pose model weights used when parts segmentation is enabled
+POSE_MODEL_PATH = "yolov8n-pose.pt"
+
+# When True the pose model is loaded and body parts are computed
+ENABLE_POSE_PARTS = True
+
+# Optional resize (width, height) applied before inference to speed up models
+# Set to ``None`` to disable
+INFER_RESIZE: tuple[int, int] | None = None
+
 # Default confidence threshold for detections
 CONF_THRES = 0.35
 
@@ -32,4 +42,7 @@ IGNORE_REGIONS = [
 
 # Directory that contains rule plug‑ins
 RULES_DIR = "rules"
+
+# Directory where exported part annotations are stored
+EXPORT_PARTS_DIR = "captures_parts"
 

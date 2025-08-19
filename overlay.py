@@ -34,6 +34,12 @@ class KeyHelper:
     def is_reload_rules(self, k: int) -> bool:
         return k == ord("r")
 
+    def is_toggle_parts(self, k: int) -> bool:
+        return k == ord("b")
+
+    def is_export_parts(self, k: int) -> bool:
+        return k == ord("o")
+
     def is_plus(self, k: int) -> bool:
         return k in (ord("+"), ord("="))
 
@@ -55,13 +61,14 @@ def draw_label(img, x: int, y: int, text: str):
     cv2.putText(img, text, (x + 3, y - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
 
-def put_hud(img, fps: float, count: int, filter_active: bool, conf_thres: float):
+def put_hud(img, fps: float, count: int, filter_active: bool, conf_thres: float, parts_on: bool):
     text_lines = [
         f"FPS: {fps:.1f}",
         f"Tracked: {count}",
         f"Filter: {'person-only' if filter_active else 'all'}",
+        f"Parts: {'ON' if parts_on else 'OFF'}",
         f"conf>={conf_thres:.2f}",
-        "q/Esc: Quit  m:Menu  f:Filter  t:Reset  p:Shot  k:Capture  r:Reload",
+        "q/Esc: Quit  m:Menu  f:Filter  t:Reset  p:Shot  k:Capture  r:Reload  b:Parts  o:Export",
     ]
     x, y = 10, 22
     for t in text_lines:
@@ -72,11 +79,12 @@ def put_hud(img, fps: float, count: int, filter_active: bool, conf_thres: float)
 
 
 class MenuState:
-    def __init__(self, conf_thres: float, person_only: bool, show_trails: bool, show_hud: bool):
+    def __init__(self, conf_thres: float, person_only: bool, show_trails: bool, show_hud: bool, show_parts: bool):
         self.conf_thres = conf_thres
         self.person_only = person_only
         self.show_trails = show_trails
         self.show_hud = show_hud
+        self.show_parts = show_parts
 
 
 class Drawer:
@@ -97,6 +105,8 @@ class Drawer:
         fps_smooth: float,
         person_only: bool,
         conf_thres: float,
+        show_parts: bool,
+        parts_list: List[Dict[str, tuple]] | None,
     ):
         # Boxes & IDs
         def nearest_det(box):
@@ -129,8 +139,15 @@ class Drawer:
                 for k in range(1, len(pts)):
                     cv2.line(img, pts[k - 1], pts[k], color, 2)
 
+        if show_parts and parts_list:
+            for parts in parts_list:
+                if parts:
+                    from pose_parts import draw_parts_on_image
+
+                    draw_parts_on_image(img, parts)
+
         if show_hud:
-            put_hud(img, fps_smooth, len(id2box), person_only, conf_thres)
+            put_hud(img, fps_smooth, len(id2box), person_only, conf_thres, show_parts)
 
     def draw_menu(self, img, state: MenuState):
         overlay = img.copy()
@@ -155,6 +172,7 @@ class Drawer:
         entries = [
             ("Person-only", "toggle_person"),
             ("Trails anzeigen", "toggle_trails"),
+            ("Körperteile anzeigen", "toggle_parts"),
             ("HUD anzeigen", "toggle_hud"),
             (f"Conf Schwelle: {state.conf_thres:.2f} (+/-)", "noop"),
             ("Regeln neu laden", "reload_rules"),
@@ -180,7 +198,8 @@ class Drawer:
 
         dot(state.person_only, 78)
         dot(state.show_trails, 114)
-        dot(state.show_hud, 150)
+        dot(state.show_parts, 150)
+        dot(state.show_hud, 186)
 
     def menu_click(self, x: int, y: int, state: MenuState):
         for (x1, y1, x2, y2, key) in self._menu_rects:
@@ -189,6 +208,8 @@ class Drawer:
                     state.person_only = not state.person_only
                 elif key == "toggle_trails":
                     state.show_trails = not state.show_trails
+                elif key == "toggle_parts":
+                    state.show_parts = not state.show_parts
                 elif key == "toggle_hud":
                     state.show_hud = not state.show_hud
                 elif key == "reload_rules":
