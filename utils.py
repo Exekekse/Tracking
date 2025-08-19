@@ -1,4 +1,13 @@
 import cv2
+import os
+import json
+import numpy as np
+import pathlib
+import tempfile
+import time
+import logging
+import logging.handlers
+import io
 
 
 def _get_attr(mod, name):
@@ -70,3 +79,162 @@ def ema(prev_xywh, new_xywh, alpha):
         alpha * nw + (1 - alpha) * pw,
         alpha * nh + (1 - alpha) * ph,
     )
+
+
+# --- Persistenz & Hilfsfunktionen -------------------------------------------------
+
+
+def _atomic_write(path: pathlib.Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(delete=False, dir=path.parent) as tmp:
+        tmp.write(data)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        tmp_name = tmp.name
+    os.replace(tmp_name, path)
+
+
+def read_json(path: pathlib.Path, default):
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def write_json(path: pathlib.Path, obj) -> None:
+    data = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
+    _atomic_write(path, data)
+
+
+def get_storage_paths():
+    base = os.environ.get("LOCALAPPDATA")
+    if base:
+        root = pathlib.Path(base) / "TrackingAI" / "Valorant"
+    else:
+        root = pathlib.Path.home() / ".local" / "share" / "TrackingAI" / "Valorant"
+    paths = {
+        "root": root,
+        "config": root / "config",
+        "data": root / "data",
+        "logs": root / "logs",
+    }
+    for p in paths.values():
+        p.mkdir(parents=True, exist_ok=True)
+    return paths
+
+
+def load_calibration(paths, defaults):
+    cfg_path = paths["config"] / "calibration.json"
+    cfg = read_json(cfg_path, {})
+    merged = {**defaults, **cfg}
+    return merged, cfg_path
+
+
+def save_calibration(cfg_path, cfg):
+    cfg["updated_utc"] = int(time.time())
+    write_json(cfg_path, cfg)
+
+
+def load_heatmap(path: pathlib.Path, shape):
+    try:
+        arr = np.load(str(path))
+        if arr.shape == shape:
+            return arr
+    except Exception:
+        pass
+    return np.zeros(shape, dtype=np.float32)
+
+
+def save_heatmap(path: pathlib.Path, arr):
+    data = io.BytesIO()
+    np.save(data, arr)
+    _atomic_write(path, data.getvalue())
+
+
+def enforce_size_limit(paths, limit_bytes):
+    files = []
+    for folder in (paths["data"], paths["logs"]):
+        for p in folder.glob("**/*"):
+            if p.is_file():
+                files.append(p)
+    total = sum(p.stat().st_size for p in files)
+    if total <= limit_bytes:
+        return
+    files.sort(key=lambda p: p.stat().st_mtime)
+    while files and total > limit_bytes:
+        p = files.pop(0)
+        try:
+            size = p.stat().st_size
+            p.unlink()
+            total -= size
+        except Exception:
+            break
+
+
+class Heatmap:
+    def __init__(self, shape):
+        self.grid = np.zeros(shape, dtype=np.float32)
+        self.shape = shape
+        self.counter = 0
+
+    def accumulate(self, cx, cy, w, h):
+        x = int(np.clip(cx / w * self.shape[1], 0, self.shape[1] - 1))
+        y = int(np.clip(cy / h * self.shape[0], 0, self.shape[0] - 1))
+        self.grid[y, x] += 1.0
+        self.counter += 1
+
+    def build_mask(self, percentile=0.6, min_y_ratio=0.6):
+        if self.counter == 0:
+            return np.zeros(self.shape, dtype=np.uint8)
+        thr = np.max(self.grid) * percentile
+        mask = (self.grid >= thr).astype(np.uint8)
+        cutoff = int(self.shape[0] * min_y_ratio)
+        mask[:cutoff, :] = 0
+        return mask
+
+    def reset(self):
+        self.grid.fill(0.0)
+        self.counter = 0
+
+
+def candidate_valid(box, frame_w, frame_h, ar_range, ignore_mask, area_ratio, viewmodel_y):
+    if box is None:
+        return False
+    x, y, w, h = box
+    if w <= 0 or h <= 0:
+        return False
+    area = w * h
+    if area > area_ratio * frame_w * frame_h:
+        return False
+    cx = x + w * 0.5
+    cy = y + h * 0.5
+    if cy > viewmodel_y * frame_h:
+        return False
+    ar = w / h
+    if not (ar_range[0] <= ar <= ar_range[1]):
+        return False
+    if ignore_mask is not None:
+        mh, mw = ignore_mask.shape
+        mx = int(cx / frame_w * mw)
+        my = int(cy / frame_h * mh)
+        if 0 <= mx < mw and 0 <= my < mh and ignore_mask[my, mx] > 0:
+            return False
+    return True
+
+
+def head_above_body(head, body):
+    if head is None or body is None:
+        return False
+    hx, hy, hw, hh = head
+    bx, by, bw, bh = body
+    return hy + hh <= by
+
+
+def setup_logger(paths):
+    log_file = paths["logs"] / "session.log"
+    handler = logging.handlers.RotatingFileHandler(
+        log_file, maxBytes=256 * 1024, backupCount=3, encoding="utf-8"
+    )
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
+    return logging.getLogger("tracker")
