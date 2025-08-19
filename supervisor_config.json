@@ -1,0 +1,13 @@
+{
+  "exe_path": "C:\\Apps\\ScreenTracker\\ScreenTracker.exe",
+  "work_dir": "C:\\Apps\\ScreenTracker",
+  "args": [],
+  "env": {},
+  "log_dir": "C:\\Apps\\ScreenTracker\\logs",
+  "pid_file": "C:\\Apps\\ScreenTracker\\screentracker.pid",
+  "window_style": "Normal",
+  "restart_policy": "on-failure",
+  "restart_backoff": [1, 2, 5, 10],
+  "stop_timeout_sec": 8,
+  "max_restarts_per_10m": 5
+}
