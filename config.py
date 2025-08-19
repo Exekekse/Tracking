@@ -7,3 +7,14 @@ DEFAULT_DOWNSCALE = 1.0             # 1.0=volle Auflösung; >1.0 = kleinere Dete
 DEFAULT_MONITOR_INDEX = 1           # mss Monitor-Index (1 = Hauptmonitor)
 DEFAULT_DEV_OVERLAY = False         # Overlay/Window
 DEFAULT_CONSOLE_STATUS = True       # Konsolen-Statusausgabe bei Overlay=False
+
+# Zusatz-Parameter für verbessertes Tracking
+DEFAULT_AREA_RATIO = 0.18           # max. zulässige Box-Fläche relativ zum Frame
+DEFAULT_VIEWMODEL_Y = 0.80          # Unterer Bereich, in dem Viewmodel erwartet wird
+DEFAULT_HEAD_AR = (0.7, 1.6)        # Aspect-Ratio-Gate Kopf (w/h)
+DEFAULT_BODY_AR = (0.4, 0.9)        # Aspect-Ratio-Gate Körper (w/h)
+DEFAULT_LOCK_FRAMES = 3             # Frames bis Lock aktiviert wird
+DEFAULT_HEATMAP_GRID = (64, 36)     # Auflösung der Ignore-Heatmap
+DEFAULT_HEATMAP_INTERVAL = 500      # N Frames bis Heatmap-Auswertung
+DEFAULT_STORAGE_LIMIT_MB = 50       # Max. Speicher für Daten+Logs
+DEFAULT_TARGET_FPS = 60             # gewünschte Mindest-FPS
