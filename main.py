@@ -1,4 +1,5 @@
 import os
+import math
 import cv2
 import numpy as np
 import mss
@@ -22,29 +23,54 @@ model = YOLO(MODEL_PATH)
 model.fuse()
 
 
-def create_tracker():
-    """Create a tracker with fallback chain MOSSE → KCF → CSRT → MIL."""
-    candidates = [
-        ("legacy", "TrackerMOSSE_create"),
-        (None, "TrackerMOSSE_create"),
-        ("legacy", "TrackerKCF_create"),
-        (None, "TrackerKCF_create"),
-        ("legacy", "TrackerCSRT_create"),
-        (None, "TrackerCSRT_create"),
-        ("legacy", "TrackerMIL_create"),
-        (None, "TrackerMIL_create"),
-    ]
-    for module, name in candidates:
+TRACKER_CANDIDATES = [
+    ("legacy", "TrackerMOSSE_create"),
+    (None, "TrackerMOSSE_create"),
+    ("legacy", "TrackerKCF_create"),
+    (None, "TrackerKCF_create"),
+    ("legacy", "TrackerCSRT_create"),
+    (None, "TrackerCSRT_create"),
+    ("legacy", "TrackerMIL_create"),
+    (None, "TrackerMIL_create"),
+]
+
+
+def init_tracker(frame, bbox):
+    """Try to initialise a tracker using the fallback chain."""
+    for module, name in TRACKER_CANDIDATES:
         mod = getattr(cv2, module, cv2) if module else cv2
         creator = getattr(mod, name, None)
-        if callable(creator):
-            try:
-                return creator()
-            except Exception:
-                continue
+        if not callable(creator):
+            continue
+        try:
+            tracker = creator()
+            tracker.init(frame, bbox)
+            return tracker
+        except Exception:
+            continue
     raise RuntimeError(
         "No suitable OpenCV tracker available. Install opencv-contrib-python."
     )
+
+
+def validate_box(box, frame_shape):
+    """Validate and clamp box to frame bounds. Return tuple or None."""
+    if box is None:
+        return None
+    try:
+        x, y, w, h = [float(v) for v in box]
+    except Exception:
+        return None
+    if not all(math.isfinite(v) for v in (x, y, w, h)):
+        return None
+    height, width = frame_shape[:2]
+    x = min(max(0.0, x), width - 1.0)
+    y = min(max(0.0, y), height - 1.0)
+    w = min(max(0.0, w), width - x)
+    h = min(max(0.0, h), height - y)
+    if w < 1.0 or h < 1.0:
+        return None
+    return (x, y, w, h)
 
 
 def detect_head(frame):
@@ -61,7 +87,8 @@ def detect_head(frame):
     conf = results.boxes.conf.cpu().numpy()
     idx = conf.argmax()
     x1, y1, x2, y2 = boxes[idx]
-    return [float(x1), float(y1), float(x2 - x1), float(y2 - y1)]
+    raw = (x1, y1, x2 - x1, y2 - y1)
+    return validate_box(raw, frame.shape)
 
 
 def iou(box_a, box_b):
@@ -93,28 +120,39 @@ def main():
         while True:
             img = np.array(sct.grab(monitor))
             frame = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+            frame = np.ascontiguousarray(frame, dtype=np.uint8)
 
             if tracker is None:
                 det = detect_head(frame)
                 if det is not None:
-                    tracker = create_tracker()
-                    tracker.init(frame, tuple(det))
-                    smooth_box = np.array(det, dtype=np.float32)
+                    try:
+                        tracker = init_tracker(frame, det)
+                        smooth_box = np.array(det, dtype=np.float32)
+                    except Exception:
+                        tracker = None
+                        smooth_box = None
             else:
                 success, box = tracker.update(frame)
                 if not success:
                     tracker = None
                     smooth_box = None
                 else:
-                    box = list(box)
-                    smooth_box = ema(box, smooth_box)
+                    box = validate_box(box, frame.shape)
+                    if box is None:
+                        tracker = None
+                        smooth_box = None
+                    else:
+                        smooth_box = ema(box, smooth_box)
 
-                    if frame_count % DRIFT_CHECK_INTERVAL == 0:
-                        det = detect_head(frame)
-                        if det is not None and iou(box, det) < 0.5:
-                            tracker = create_tracker()
-                            tracker.init(frame, tuple(det))
-                            smooth_box = np.array(det, dtype=np.float32)
+                        if frame_count % DRIFT_CHECK_INTERVAL == 0:
+                            det = detect_head(frame)
+                            if det is not None and iou(box, det) < 0.5:
+                                try:
+                                    tracker = init_tracker(frame, det)
+                                    smooth_box = np.array(det, dtype=np.float32)
+                                except Exception:
+                                    tracker = None
+                                    smooth_box = None
 
             if DEV_OVERLAY and smooth_box is not None:
                 x, y, w, h = map(int, smooth_box)
