@@ -1,11 +1,16 @@
 """Detection data container used across the project."""
 
 from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
+
+Keypoint = Tuple[float, float, float]
+PartBox = Tuple[int, int, int, int]
 
 
 @dataclass
 class Detection:
-    """Represents a single detection bounding box."""
+    """Represents a single detection bounding box with optional pose data."""
 
     x1: int
     y1: int
@@ -13,6 +18,8 @@ class Detection:
     y2: int
     cls: int
     conf: float
+    keypoints: Optional[List[Keypoint]] = None
+    parts: Optional[Dict[str, PartBox]] = None
 
     @property
     def cx(self) -> int:
