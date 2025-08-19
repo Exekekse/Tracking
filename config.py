@@ -8,6 +8,19 @@ the prototype contained in :mod:`main`.
 # Path to the YOLO model weights
 MODEL_PATH = "yolov8n.pt"
 
+# Path to the YOLOv8 pose model used when ``ENABLE_POSE_PARTS`` is true
+POSE_MODEL_PATH = "yolov8n-pose.pt"
+
+# Enable computation and rendering of pose based body parts
+ENABLE_POSE_PARTS = True
+
+# Directory to store exported part annotations
+EXPORT_PARTS_DIR = "captures_parts"
+
+# Optional square size to which inference images are resized before running
+# the model.  ``None`` disables explicit resizing.
+INFER_RESIZE: int | None = None
+
 # Default confidence threshold for detections
 CONF_THRES = 0.35
 
