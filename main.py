@@ -9,6 +9,7 @@ MODEL_PATH = os.getenv("MODEL_PATH", "yolov8n.pt")
 EMA_ALPHA = float(os.getenv("EMA_ALPHA", 0.3))
 DEV_OVERLAY = os.getenv("DEV_OVERLAY", "0") == "1"
 DRIFT_CHECK_INTERVAL = int(os.getenv("DRIFT_CHECK_INTERVAL", 60))
+DETECTION_DOWNSCALE = float(os.getenv("DETECTION_DOWNSCALE", 1.0))
 
 # Determine if a specialised head model exists. If not, restrict to class 0.
 if not os.path.exists(MODEL_PATH):
@@ -22,27 +23,41 @@ model.fuse()
 
 
 def create_tracker():
-    """Create a MOSSE tracker, falling back to KCF if unavailable."""
+    """Create a tracker with fallback chain MOSSE → KCF → CSRT → MIL."""
     candidates = [
         ("legacy", "TrackerMOSSE_create"),
         (None, "TrackerMOSSE_create"),
         ("legacy", "TrackerKCF_create"),
         (None, "TrackerKCF_create"),
+        ("legacy", "TrackerCSRT_create"),
+        (None, "TrackerCSRT_create"),
+        ("legacy", "TrackerMIL_create"),
+        (None, "TrackerMIL_create"),
     ]
     for module, name in candidates:
         mod = getattr(cv2, module, cv2) if module else cv2
         creator = getattr(mod, name, None)
         if callable(creator):
-            return creator()
-    raise RuntimeError("No suitable OpenCV tracker available")
+            try:
+                return creator()
+            except Exception:
+                continue
+    raise RuntimeError(
+        "No suitable OpenCV tracker available. Install opencv-contrib-python."
+    )
 
 
 def detect_head(frame):
     """Run YOLO detection and return the best bounding box (x, y, w, h)."""
-    results = model(frame, verbose=False, classes=DETECTION_CLASSES)[0]
+    scale = DETECTION_DOWNSCALE if DETECTION_DOWNSCALE < 1.0 else 1.0
+    inp = frame
+    if scale != 1.0:
+        new_size = (int(frame.shape[1] * scale), int(frame.shape[0] * scale))
+        inp = cv2.resize(frame, new_size, interpolation=cv2.INTER_LINEAR)
+    results = model(inp, verbose=False, classes=DETECTION_CLASSES)[0]
     if not results.boxes:
         return None
-    boxes = results.boxes.xyxy.cpu().numpy()
+    boxes = results.boxes.xyxy.cpu().numpy() / scale
     conf = results.boxes.conf.cpu().numpy()
     idx = conf.argmax()
     x1, y1, x2, y2 = boxes[idx]
@@ -105,9 +120,6 @@ def main():
                 x, y, w, h = map(int, smooth_box)
                 cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
                 cv2.imshow("tracker", frame)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
-            else:
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
 
